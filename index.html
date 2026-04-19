@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Security Node</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #0d1117; 
+            color: #c9d1d9; 
+            text-align: center; 
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { color: #58a6ff; font-weight: 300; letter-spacing: 2px; }
+        
+        .dashboard-grid {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .card { 
+            background: #161b22; 
+            padding: 20px; 
+            width: 80%; 
+            max-width: 900px;
+            border-radius: 12px; 
+            border: 1px solid #30363d;
+            box-shadow: 0px 8px 24px rgba(0,0,0,0.5); 
+        }
+
+        #status-badge {
+            font-size: 1.2rem;
+            font-weight: bold;
+            padding: 10px 20px;
+            border-radius: 50px;
+            display: inline-block;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+        .status-resting { background-color: #238636; color: white; box-shadow: 0 0 15px rgba(35, 134, 54, 0.4); }
+        .status-moving { background-color: #da3633; color: white; box-shadow: 0 0 25px rgba(218, 54, 51, 0.8); }
+
+        /* New Button Styling */
+        #arm-btn {
+            background-color: #f0883e;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            transition: 0.2s;
+        }
+        #arm-btn:hover { background-color: #ff9955; }
+        #arm-btn.armed { background-color: #da3633; }
+
+        canvas { max-width: 100%; }
+    </style>
+</head>
+<body>
+
+    <h1>IOT SECURITY NODE</h1>
+    
+    <div class="dashboard-grid">
+        <div class="card">
+            <button id="arm-btn">System Disarmed (Click to Arm)</button>
+            <br>
+            <div id="status-badge" class="status-resting">Waiting for data...</div>
+        </div>
+
+        <div class="card">
+            <canvas id="iotChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('iotChart').getContext('2d');
+        const badge = document.getElementById('status-badge');
+        const armBtn = document.getElementById('arm-btn');
+
+        // --- Audio System Variables ---
+        let systemArmed = false;
+        let alarmCooldown = false;
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // The button logic
+        armBtn.addEventListener('click', () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            systemArmed = !systemArmed;
+            
+            if (systemArmed) {
+                armBtn.textContent = "SYSTEM ARMED - MONITORING";
+                armBtn.classList.add('armed');
+            } else {
+                armBtn.textContent = "System Disarmed (Click to Arm)";
+                armBtn.classList.remove('armed');
+            }
+        });
+
+        // Function to generate a loud beep
+        function playAlarmSound() {
+            if (!systemArmed || alarmCooldown) return; 
+            
+            alarmCooldown = true; // Prevent overlapping sounds
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = 'square'; // Harsh, loud sound
+            oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); // High pitch
+            
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime); // Volume (0.1 is safe, 1.0 is very loud!)
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.start();
+            
+            // Stop beep after 0.5 seconds
+            setTimeout(() => {
+                oscillator.stop();
+                alarmCooldown = false; 
+            }, 500);
+        }
+
+        const iotChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Z-Axis Force (Gravity)',
+                    borderColor: '#58a6ff',
+                    backgroundColor: 'rgba(88, 166, 255, 0.1)',
+                    data: [],
+                    borderWidth: 3,
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 0
+                }]
+            },
+            options: { animation: false, scales: { y: { grid: { color: '#30363d' } }, x: { grid: { display: false } } } } 
+        });
+
+        async function fetchLiveData() {
+            try {
+                const response = await fetch('http://localhost:8000/api/latest');
+                const data = await response.json();
+
+                iotChart.data.labels = [];
+                iotChart.data.datasets[0].data = [];
+                let latestZ = 9.8; 
+
+                data.forEach((reading, index) => {
+                    iotChart.data.labels.push(index); 
+                    iotChart.data.datasets[0].data.push(reading.values.z); 
+                    latestZ = reading.values.z; 
+                });
+
+                iotChart.update();
+
+                // --- The Alarm Trigger Logic ---
+                if (latestZ > 11 || latestZ < 8) {
+                    badge.textContent = "INTRUDER DETECTED";
+                    badge.className = "status-moving";
+                    playAlarmSound(); // Trigger the audio!
+                } else {
+                    badge.textContent = "AREA SECURE";
+                    badge.className = "status-resting";
+                }
+
+            } catch (error) {
+                console.error("Data stream offline");
+            }
+        }
+
+        setInterval(fetchLiveData, 500); 
+    </script>
+</body>
+</html>
